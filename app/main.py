@@ -21,6 +21,7 @@ models.Base.metadata.create_all(bind=engine)
 
 @app.post("/register", response_model=schemas.AdminResponse)
 def register_admin(admin: schemas.AdminCreate, db: Session = Depends(get_db)):
+    
     db_admin = db.query(models.Admin).filter(models.Admin.username == admin.username).first()
     if db_admin:
         raise HTTPException(status_code=400, detail="Username already registered")
@@ -44,6 +45,7 @@ def register_admin(admin: schemas.AdminCreate, db: Session = Depends(get_db)):
 
 @app.post('/login', response_model=schemas.AdminResponse)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+
     admin = await auth.authenticate_admin(form_data.username, form_data.password, db)
     if not admin:
         raise HTTPException(
@@ -53,9 +55,16 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
         )
     
     access_token = auth.create_access_token(data={"sub": admin.username})
-    return admin
+    return {
+        "id": admin.id,
+        "username": admin.username,
+        "email": admin.email,
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
 
-@app.post("/add_student", response_model=schemas.StudentCreate)
+
+@app.post("/add_student", response_model=schemas.StudentResponse)
 def add_student(student: schemas.StudentCreate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
 
     db_student = db.query(models.Student).filter(models.Student.username == student.username).first()
@@ -67,9 +76,10 @@ def add_student(student: schemas.StudentCreate, token: str = Depends(oauth2_sche
     db.add(new_student)
     db.commit()
     db.refresh(new_student)
+
     return new_student
 
-@app.post("/add_teacher", response_model=schemas.TeacherCreate)
+@app.post("/add_teacher",response_model=schemas.TeacherResponse)
 def add_teacher(teacher: schemas.TeacherCreate, token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
 
     db_teacher = db.query(models.Teacher).filter(models.Teacher.username == teacher.username).first()
@@ -81,4 +91,5 @@ def add_teacher(teacher: schemas.TeacherCreate, token: str = Depends(oauth2_sche
     db.add(new_teacher)
     db.commit()
     db.refresh(new_teacher)
+
     return new_teacher

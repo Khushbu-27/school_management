@@ -38,15 +38,4 @@ async def authenticate_admin(
     if admin is None or not verify_password(password, admin.hashed_password):
         raise HTTPException(status_code=400, detail="Invalid credentials")
 
-    access_token = create_access_token(data={"sub": admin.username})
-
- 
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "admin": {
-            "id": admin.id,
-            "username": admin.username,
-            "email": admin.email
-        }
-    }
+    return admin
