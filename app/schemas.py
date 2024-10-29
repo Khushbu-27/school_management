@@ -49,3 +49,25 @@ class TeacherResponse(BaseModel):
 
     class Config:
         orm_mode = True
+
+
+class StudentLoginResponse(BaseModel):
+    id: int
+    username: str
+    email: str
+    access_token: str
+    token_type: str
+
+    class Config:
+        orm_mode = True
+
+
+class TeacherLoginResponse(BaseModel):
+    id: int
+    username: str
+    email: str
+    access_token: str
+    token_type: str
+
+    class Config:
+        orm_mode = True
