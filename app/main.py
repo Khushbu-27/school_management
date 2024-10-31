@@ -47,7 +47,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
     user = db.query(models.Admin).filter(models.Admin.username == form_data.username).first()
     role = form_data.scopes[0]  # Assuming `role` is passed in `scopes` for simplicity
 
-    # Check user role and existence
+  
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -66,7 +66,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
         )
 
 def authorize_admin(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    # Decodes token to confirm admin role
+  
     payload = auth.decode_access_token(token)
     if payload.get("role") != "admin":
         raise HTTPException(
