@@ -24,6 +24,66 @@ def admin_register(admin: schemas.AdminCreate, db: Session = Depends(get_db)):
     db.add(new_admin)
     db.commit()
     db.refresh(new_admin)
+<<<<<<< HEAD
+=======
+
+    access_token = create_access_token(data={"sub": new_admin.username})
+    return schemas.AdminResponse(
+        id=new_admin.id,     
+        username=new_admin.username,  
+        email=new_admin.email,  
+        access_token=access_token,
+        token_type="bearer"
+    )
+
+
+@app.post('/login', tags=["login"])
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(models.Admin).filter(models.Admin.username == form_data.username).first()
+    role = form_data.scopes[0]  # Assuming `role` is passed in `scopes` for simplicity
+
+  
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials or role",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Allow token generation only if the role is admin
+    if role == "admin":
+        access_token = create_access_token(data={"sub": user.username, "role": role})
+        return {"access_token": access_token, "token_type": "bearer"}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin can generate tokens."
+        )
+
+def authorize_admin(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+  
+    payload = auth.decode_access_token(token)
+    if payload.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin authorization required"
+        )
+    return payload
+
+def get_current_admin_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    payload = decode_access_token(token)
+    user = db.query(models.User).filter(models.User.username == payload.get("sub")).first()
+    
+    if not user or user.role != "admin":
+        raise HTTPException(status_code=403, detail="Operation allowed only for admin")
+    return user
+
+@app.get("/admin/{admin_id}", response_model=schemas.AdminResponse, tags=["admin"])
+def get_admin(admin_id: int, db: Session = Depends(get_db)):
+    admin = db.query(models.Admin).filter(models.Admin.id == admin_id).first()
+    if not admin:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin not found")
+>>>>>>> 969ee0e1dc26f5c25855a4b3fa52767dcc94ad34
     
     return {
         "id": new_admin.id,
