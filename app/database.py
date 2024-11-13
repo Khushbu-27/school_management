@@ -23,7 +23,7 @@ from sqlalchemy.orm import sessionmaker
 
 SQLALCHEMY_DATABASE_URL = "postgresql+psycopg2://postgres:Khushi-27@localhost/school_db" 
 
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args= {"check_same_thread": False})
+engine = create_engine(SQLALCHEMY_DATABASE_URL)
 
 SessionLocal = sessionmaker(bind=engine, autocommit= False, autoflush= False )
 
