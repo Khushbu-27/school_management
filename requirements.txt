@@ -1,7 +1,16 @@
+<<<<<<< HEAD
 fastapi
 uvicorn
 pydantic
 pyjwt
 passlib
 sqlalchemy
+=======
+fastapi
+uvicorn
+pydantic
+pyjwt
+passlib
+sqlalchemy
+>>>>>>> f71610e (updated in project folder)
 python-jose
