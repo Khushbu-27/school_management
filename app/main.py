@@ -5,7 +5,7 @@ from fastapi import FastAPI, Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from . import  models, schemas
-from  email_utils import send_otp_email
+from  . import email_utils  
 from .database import engine, get_db
 from router.auth import create_access_token, decode_access_token, get_password_hash, verify_password 
 from datetime import date, datetime
@@ -105,35 +105,42 @@ def authorize_user(token: str = Depends(oauth2_scheme), db: Session = Depends(ge
 otp_store = {}
 otp_expiry_time = 300 
 
+#forgot password
 @app.post("/forgot-password/" , tags=["login"])
-async def forgot_password(email: str):
+def forgot_password(email: str):
     """Generate OTP and send it to the email."""
-    otp = str(random.randint(100000, 999999))  # Generate a random 6-digit OTP
+    otp = str(random.randint(100000, 999999))  
     otp_store[email] = {"otp": otp, "timestamp": time.time()}
     
-    # Send OTP via email
-    send_otp_email(email, otp)
+    email_utils.send_otp_email(email, otp)
     
     return {"message": "OTP sent to email"}
 
-@app.post("/reset-password/" , tags=["login"])
-async def reset_password(email: str, otp: str, new_password: str):
-    """Verify OTP and reset password."""
+#reset password
+@app.post("/reset-password/", tags=["login"])
+def reset_password(user_id: int, email: str, otp: str, new_password: str, db: Session = Depends(get_db)):
+    """Verify user ID, OTP and reset password."""
+    
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid user ID or email")
+
     if email not in otp_store:
         raise HTTPException(status_code=400, detail="OTP not requested")
     
     otp_data = otp_store[email]
+
     if time.time() - otp_data["timestamp"] > otp_expiry_time:
-        del otp_store[email]  # Remove expired OTP
+        del otp_store[email]
         raise HTTPException(status_code=400, detail="OTP expired")
     
     if otp_data["otp"] != otp:
         raise HTTPException(status_code=400, detail="Invalid OTP")
     
-    # Hash the new password and update the user's password in your database
-    hashed_password = new_password  # In a real app, hash this password securely
-    
-    # For now, we just delete the OTP after successful reset
+    hashed_password = get_password_hash(new_password)
+    user.hashed_password = hashed_password
+    db.commit()
+
     del otp_store[email]
     
     return {"message": "Password reset successful"}
