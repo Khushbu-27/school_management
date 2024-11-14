@@ -4,6 +4,8 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException
 from sqlalchemy.orm import Session
+
+
 # from .. import schemas, models, database , main
 # from app.models import Admin
 
@@ -33,33 +35,3 @@ def decode_access_token(token: str):
         return payload
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
-
-# @app.post("/auth/admin/login")
-# async def authenticate_admin(
-#     username: str,
-#     password: str,
-#     role: str,
-#     db: Session = Depends(database.get_db) 
-# ):
-#     admin = db.query(Admin).filter(Admin.username == username).first()
-
-#     if admin is None or not verify_password(password, admin.hashed_password):
-#         raise HTTPException(status_code=400, detail="Invalid credentials")
-
-#     if role != "admin":
-#         raise HTTPException(status_code=403, detail="Access restricted to admin")
-
-
-#     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-#     access_token = create_access_token(
-#         data={"sub": admin.username, "role": role},
-#         expires_delta=access_token_expires
-#     )
-
-#     return {
-#         "access_token": access_token,
-#         "token_type": "bearer",
-#         "id": admin.id,
-#         "username": admin.username,
-#         "email": admin.email
-#     }

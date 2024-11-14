@@ -1,8 +1,11 @@
+import random
+import time
 from typing import List
 from fastapi import FastAPI, Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from . import models, schemas
+from . import  models, schemas
+from  email_utils import send_otp_email
 from .database import engine, get_db
 from router.auth import create_access_token, decode_access_token, get_password_hash, verify_password 
 from datetime import date, datetime
@@ -99,25 +102,41 @@ def authorize_user(token: str = Depends(oauth2_scheme), db: Session = Depends(ge
     
     return user
 
+otp_store = {}
+otp_expiry_time = 300 
 
-#REQUIREMENT: reset password
-# @app.post("/reset-password", tags=["login"])
-# def reset_password(request: schemas.PasswordResetRequest, db: Session = Depends(get_db)):
-   
-#     user = db.query(models.User).filter(models.User.id == request.user_id).first()
-#     if not user:
-#         raise HTTPException(
-#             status_code=status.HTTP_404_NOT_FOUND,
-#             detail="User with this ID not found."
-#         )
+@app.post("/forgot-password/" , tags=["login"])
+async def forgot_password(email: str):
+    """Generate OTP and send it to the email."""
+    otp = str(random.randint(100000, 999999))  # Generate a random 6-digit OTP
+    otp_store[email] = {"otp": otp, "timestamp": time.time()}
+    
+    # Send OTP via email
+    send_otp_email(email, otp)
+    
+    return {"message": "OTP sent to email"}
 
-#     schemas.validate_password(request.new_password)
-#     hashed_password = get_password_hash(request.new_password)
-
-#     user.hashed_password = hashed_password
-#     db.commit()
-
-#     return {"message": "Password reset successful. You can now log in with your new password."}
+@app.post("/reset-password/" , tags=["login"])
+async def reset_password(email: str, otp: str, new_password: str):
+    """Verify OTP and reset password."""
+    if email not in otp_store:
+        raise HTTPException(status_code=400, detail="OTP not requested")
+    
+    otp_data = otp_store[email]
+    if time.time() - otp_data["timestamp"] > otp_expiry_time:
+        del otp_store[email]  # Remove expired OTP
+        raise HTTPException(status_code=400, detail="OTP expired")
+    
+    if otp_data["otp"] != otp:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+    
+    # Hash the new password and update the user's password in your database
+    hashed_password = new_password  # In a real app, hash this password securely
+    
+    # For now, we just delete the OTP after successful reset
+    del otp_store[email]
+    
+    return {"message": "Password reset successful"}
 
 
 # REQUIREMENT: View Admin own Info
@@ -345,15 +364,13 @@ def add_exam_schedule(
     db: Session = Depends(get_db),
     current_user = Depends(authorize_user)
 ):
-    # Check if the user is a teacher
+   
     if current_user.role != "teacher":
         raise HTTPException(status_code=403, detail="Only teachers can add exams.")
 
-    # Ensure that the teacher is adding an exam for their class and subject
     class_name = current_user.class_name
     subject_name = current_user.subject_name
     
-    # Check if the teacher is trying to add an exam for their own class and subject
     if current_user.class_name != class_name or current_user.subject_name != subject_name:
         raise HTTPException(status_code=403, detail="You cannot add an exam for this class or subject.")
 
@@ -369,7 +386,6 @@ def add_exam_schedule(
     if status not in ['scheduled', 'completed']:
         raise HTTPException(status_code=400, detail="Invalid status. Choose either 'scheduled' or 'completed'.")
 
-    # Create a new exam entry
     new_exam = models.Exam(
         class_name=class_name,
         subject_name=subject_name,
@@ -382,7 +398,6 @@ def add_exam_schedule(
     db.refresh(new_exam)
 
     return {"message": "Exam added successfully", "exam": new_exam}
-
 
 
 # REQUIREMENT: update exam schedule by teacher only
@@ -399,18 +414,20 @@ def update_exam_schedule(exam_id: int, class_name: str = None, subject_name: str
     if current_user.role != "teacher":
         raise HTTPException(status_code=403, detail="Only teachers can add exams.")
     
+    if current_user.class_name != class_name or current_user.subject_name != subject_name:
+        raise HTTPException(status_code=403, detail="You cannot update an exam for this class or subject.")
+    
     try:
         exam_date = datetime.strptime(date, "%d-%m-%Y").date()  
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Use DD-MM-YYYY.")
     
-    # if exam_date < datetime.today().date():
-    #     raise HTTPException(status_code=400, detail="Exam date cannot be in the past.")
+    if exam_date < datetime.today().date():
+        raise HTTPException(status_code=400, detail="Exam date cannot be in the past.")
 
     status = status.lower()  
     if status not in ['scheduled', 'completed']:
         raise HTTPException(status_code=400, detail="Invalid status. Choose either 'scheduled' or 'completed'.")
-
 
     exam.class_name = class_name
     exam.subject_name = subject_name
@@ -420,6 +437,7 @@ def update_exam_schedule(exam_id: int, class_name: str = None, subject_name: str
 
     db.commit()
     return {"message": "Exam updated successfully", "exam": exam}
+
 
 #REQUIREMENT: teacher and student view exam schedule
 @app.get("/exam/{exam_id}", status_code=status.HTTP_200_OK, tags=["student", "teacher"])
@@ -450,13 +468,17 @@ def view_exam_schedule(
 
 # REQUIREMENT: teacher can delete exam
 @app.delete("/teacher/delete_exam/{exam_id}", tags=["teacher"])
-async def delete_exam(exam_id: int, current_user=Depends(authorize_user), db: Session = Depends(get_db)):
+def delete_exam(exam_id: int, current_user=Depends(authorize_user), db: Session = Depends(get_db)):
     if current_user.role != "teacher":
         raise HTTPException(status_code=403, detail="Only teachers can delete exams")
     
     exam = db.query(models.Exam).filter(models.Exam.id == exam_id).first()
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
+    
+    if current_user.role == "teacher":
+        if exam.class_name != current_user.class_name or exam.subject_name != current_user.subject_name:
+            raise HTTPException(status_code=403, detail="You are not authorized to delete this exam schedule.")
 
     db.delete(exam)
     db.commit()
@@ -472,11 +494,10 @@ def generate_marks(
     db: Session = Depends(get_db),
     current_user = Depends(authorize_user)
 ):
-    # Check if the user is a teacher
+
     if current_user.role != "teacher":
         raise HTTPException(status_code=403, detail="Only teachers can generate marks")
 
-    # Fetch the exam details using exam_id
     exam = db.query(models.Exam).filter(
         models.Exam.id == exam_id
     ).first()
@@ -484,38 +505,33 @@ def generate_marks(
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found.")
 
-    # Check if the teacher is allowed to generate marks for this exam (class_name and subject_name check)
-    if exam.class_name != current_user.class_name or exam.subject_name != current_user.subject_name:
+    if exam.class_name != current_user.class_name :
         raise HTTPException(status_code=403, detail="You cannot generate marks for this class or subject.")
-
-    response_data = []  # Collecting response data
+    response_data = []  
 
     for mark in marks_data:
-        # Check if the student exists in the class and subject for the given exam
+        
         student = db.query(models.User).filter(
             models.User.username == mark.student_name,
             models.User.class_name == exam.class_name,
-            models.User.subject_name == exam.subject_name
+            # models.User.subject_name == exam.subject_name
         ).first()
 
         if not student:
             raise HTTPException(status_code=404, detail=f"Student '{mark.student_name}' not found in class {exam.class_name} for subject {exam.subject_name}.")
 
-        # Check if the marks entered are valid (less than or equal to the maximum marks for the exam)
         if mark.student_marks > exam.marks:
             raise HTTPException(status_code=400, detail=f"Marks cannot be greater than the maximum marks ({exam.marks}) for this exam.")
 
-        # If everything is valid, create a new marks entry
         new_marks = models.StudentMarks(
             student_name=mark.student_name, 
             class_name=exam.class_name,
             subject_name=exam.subject_name, 
             exam_id=exam.id,        
-            marks=mark.student_marks        
+            student_marks=mark.student_marks        
         )
         db.add(new_marks)
 
-        # Add the result to the response data
         response_data.append(schemas.GeneratedMarkResponse(
             exam_id=exam.id,
             student_name=mark.student_name,
@@ -529,27 +545,23 @@ def generate_marks(
     return schemas.MarksGenerationResponse(msg="Marks generated successfully", data=response_data)
 
 
-
-
-
-
 # REQUIREMENT: student - view student own marks
 @app.get("/students/{student_id}/marks", response_model=List[schemas.StudentMarks], tags=["student"])
-def get_student_marks(student_id: int,db: Session = Depends(get_db),current_user=Depends(authorize_user)):
-    
+def get_student_marks(student_id: int, db: Session = Depends(get_db), current_user=Depends(authorize_user)):
+   
     if current_user.role != "student" or current_user.id != student_id:
         raise HTTPException(status_code=403, detail="Access forbidden")
 
-    marks_records = (
-        db.query(models.StudentMarks)
-        .filter(models.StudentMarks.student_name == current_user.username)
-        .all()
-    )
+    eligible_exams = db.query(models.Exam).filter(models.Exam.class_name == current_user.class_name).all()
+    if not eligible_exams:
+        raise HTTPException(status_code=403, detail="You are not authorized to view this exam marks.")
+    
+    marks_records = db.query(models.StudentMarks).filter(models.StudentMarks.student_id == student_id).all()
 
     if not marks_records:
         raise HTTPException(status_code=404, detail="Marks not found for the student")
 
-    return marks_records
+    return [schemas.StudentMarks.from_orm(student_marks) for student_marks in marks_records]
 
 
 # REQUIREMENT: admin can delete users

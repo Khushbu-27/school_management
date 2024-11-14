@@ -3,7 +3,7 @@ from enum import Enum
 from fastapi import HTTPException
 from pydantic import BaseModel, Field, EmailStr, validator
 from typing import Optional, List
-from datetime import date
+from datetime import date, datetime
 import re
 
 # Admin Registration Schema 
@@ -127,7 +127,7 @@ class ExamCreate(BaseModel):
     @validator("status", pre=True, always=True)
     def set_status(cls, v, values):
        
-        if 'date' in values and values['date'] < date.today():
+        if 'date' in values and values['date'] < datetime.today().date():
             return ExamStatus.completed
         return v or ExamStatus.scheduled
     
@@ -145,7 +145,7 @@ class ExamResponse(BaseModel):
 class GenerateMarks(BaseModel):
     # student_id: int
     student_name: str
-    student_marks: int = Field(..., ge=0, le=100, description="Marks must be between 0 and 100.")
+    student_marks: int = Field(..., ge=0, le=100)
 
     class Config:
         orm_mode = True 
@@ -165,7 +165,8 @@ class MarksGenerationResponse(BaseModel):
     data: List[GeneratedMarkResponse]
     
     class Config:
-        orm_mode = True  # This allows Pydantic to work with SQLAlchemy models directly
+        orm_mode = True 
+
 # # Password Reset Request
 # class PasswordResetRequest(BaseModel):
 #     user_id: int
@@ -199,5 +200,8 @@ class StudentUpdate(UserUpdate):
     pass
 
 class StudentMarks(BaseModel):
-    student_id: int = Field(..., description="The ID of the student")
-    marks: int = Field(..., ge=0, le=100, description="Marks obtained by the student (0-100)")
+    student_id: int
+    student_marks: int 
+
+    class Config:
+        orm_mode = True
