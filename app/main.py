@@ -1,7 +1,8 @@
 import random
 import time
 from typing import List
-from fastapi import FastAPI, Depends, HTTPException, Query, status
+import dns.resolver
+from fastapi import FastAPI, Depends, HTTPException, Query, requests, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from . import  models, schemas
@@ -10,6 +11,10 @@ from .database import engine, get_db
 from router.auth import create_access_token, decode_access_token, get_password_hash, verify_password 
 from datetime import date, datetime
 from fastapi import HTTPException, status
+from email_validator import validate_email, EmailNotValidError
+import smtplib
+import requests 
+
 
 app = FastAPI()
 
@@ -19,31 +24,80 @@ models.Base.metadata.create_all(bind=engine)
 
 
 # REQUIREMENT: Registration for Admin only
+def is_valid_domain(email: str) -> bool:
+    try:
+        domain = email.split('@')[1]
+
+        dns.resolver.resolve(domain, 'MX')
+        return True
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
+        return False
+
+def is_valid_email(email: str) -> bool:
+    if not is_valid_domain(email):
+        raise HTTPException(status_code=400, detail="Invalid email domain")
+    return True
+
+HUNTER_API_KEY = "12ac7d829840127d483cc27e59281c5bd5f61d2f"
+
+def verify_email_with_hunter(email: str) -> bool:
+    url = f"https://api.hunter.io/v2/email-verifier?email={email}&api_key={HUNTER_API_KEY}"
+    response = requests.get(url)
+    print(response.status_code, response.text) 
+    if response.status_code != 200:
+        raise HTTPException(status_code=500, detail="Error verifying email with Hunter API")
+    data = response.json()
+    print(data) 
+    if data['data']['status'] == 'valid':
+        return True 
+    else:
+        raise HTTPException(status_code=400, detail="Invalid or undeliverable email address")
+
+    # if data['data']['status'] == 'valid':
+    #     return True
+    # else: 
+    #     raise HTTPException(status_code=400, detail="Invalid or undeliverable email address")
+
 @app.post("/admin/register", response_model=schemas.AdminResponse, tags=["admin"])
 def admin_register(admin: schemas.AdminCreate, db: Session = Depends(get_db)):
-   
+    """
+    Register an admin after validating email and ensuring it is valid.
+    """
     if admin.password != admin.confirm_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password and confirm password do not match"
         )
     
-    db_admin = db.query(models.User).filter(models.User.username == admin.username).first()
-    if db_admin:
+    if db.query(models.User).filter(models.User.username == admin.username).first():
         raise HTTPException(status_code=400, detail="Username already registered")
+    
+    if db.query(models.User).filter(models.User.email == admin.email).first():
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    if not is_valid_email(admin.email):
+        raise HTTPException(status_code=400, detail="Invalid email domain")
+    
+    if not verify_email_with_hunter(admin.email):
+        raise HTTPException(status_code=400, detail="Email verification failed")
 
-    hashed_password = get_password_hash(admin.password)  
-    new_admin = models.User(username=admin.username, email=admin.email, hashed_password=hashed_password, role="admin")
+    hashed_password = get_password_hash(admin.password)
+    new_admin = models.User(
+        username=admin.username,
+        email=admin.email,
+        hashed_password=hashed_password,
+        role="admin"
+    )
     db.add(new_admin)
     db.commit()
     db.refresh(new_admin)
     
     return {
+        "message": "Your email has been verify. You can login with your username",
         "id": new_admin.id,
         "username": new_admin.username,
         "email": new_admin.email
     }
-
 
 # REQUIREMENT: Login users
 @app.post('/login', tags=["login"])
@@ -92,7 +146,7 @@ def authorize_user(token: str = Depends(oauth2_scheme), db: Session = Depends(ge
     payload = decode_access_token(token)
     username = payload.get("sub")
     role = payload.get("role")
-    
+ 
     if role not in ["admin", "teacher", "student"]:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid role")
 
@@ -107,13 +161,17 @@ otp_expiry_time = 300
 
 #forgot password
 @app.post("/forgot-password/" , tags=["login"])
-def forgot_password(email: str):
+def forgot_password(email: str , db: Session = Depends(get_db)):
     """Generate OTP and send it to the email."""
+    
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid user email")
+
     otp = str(random.randint(100000, 999999))  
     otp_store[email] = {"otp": otp, "timestamp": time.time()}
     
-    email_utils.send_otp_email(email, otp)
-    
+    email_utils.send_otp_email(email, otp)  
     return {"message": "OTP sent to email"}
 
 #reset password
@@ -150,11 +208,11 @@ def reset_password(user_id: int, email: str, otp: str, new_password: str, db: Se
 @app.get("/admin/{admin_id}", response_model=schemas.AdminResponse, tags=["admin"])
 def view_admin_info(admin_id: int, token: dict = Depends(authorize_admin), db: Session = Depends(get_db), current_user = Depends(authorize_admin)):
 
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin authorization required"
-        ) 
+    # if current_user.role != "admin":
+    #     raise HTTPException(
+    #         status_code=status.HTTP_403_FORBIDDEN,
+    #         detail="Admin authorization required"
+    #     ) 
     # if token.get("id") != admin_id:
     #     raise HTTPException(
     #         status_code=status.HTTP_403_FORBIDDEN,
@@ -199,7 +257,7 @@ def admin_view_student_info(student_id: int, token: str = Depends(authorize_admi
 
 
 # REQUIREMENT: Student - View Own Info
-@app.get("/student/me", response_model=schemas.StudentResponse, tags=["student"])
+@app.get("/student/{student_id}", response_model=schemas.StudentResponse, tags=["student"])
 def view_own_student_info(current_user= Depends(authorize_user), db: Session = Depends(get_db)):
 
     if current_user.role != "student":
@@ -210,7 +268,7 @@ def view_own_student_info(current_user= Depends(authorize_user), db: Session = D
 
 
 # REQUIREMENT: Student - Update Own Info
-@app.put("/student/me/update", response_model=schemas.StudentResponse, tags=["student"])
+@app.put("/student/{student-id}", response_model=schemas.StudentResponse, tags=["student"])
 def update_own_info(update_data: schemas.UserUpdate, current_user = Depends(authorize_user), db: Session = Depends(get_db)):
 
     if current_user.role != "student":
@@ -309,7 +367,7 @@ def admin_view_teacher_info(teacher_id: int, token: str = Depends(authorize_admi
 
 
 # REQUIREMENT: Teacher - View Own Info
-@app.get("/teacher/me", response_model=schemas.TeacherResponse, tags=["teacher"])
+@app.get("/teacher/{teacher_id}", response_model=schemas.TeacherResponse, tags=["teacher"])
 def view_own_teacher_info(db: Session = Depends(get_db) , current_user=Depends(authorize_user)):
 
     if current_user.role != "teacher":
@@ -320,20 +378,22 @@ def view_own_teacher_info(db: Session = Depends(get_db) , current_user=Depends(a
 
 
 # REQUIREMENT: view teacher own salary
-@app.get("teacher/view_salary/{teacher_id}" , tags=["teacher"])
-def view_my_salary(teacher_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(authorize_user)):
+@app.get("/teacher/view_salary/{teacher_id}" , tags=["teacher"],response_model=schemas.TeacherSalary)
+def view_my_salary( db: Session = Depends(get_db), current_user = Depends(authorize_user)):
    
-    if current_user.role != "teacher" or current_user.id != teacher_id:
+    if current_user.role != "teacher":
         raise HTTPException(status_code=403, detail="Not authorized to view this salary")
+    
+    salary = db.query(models.User).filter(models.User.salary == current_user.salary).first()
 
     if current_user.salary is None:
         raise HTTPException(status_code=404, detail="Salary not set for this teacher")
 
-    return {"teacher_id": current_user.id, "salary": current_user.salary}
+    return {"teacher_id": current_user.id, "salary": salary}
  
 
 # REQUIREMENT: Teacher - Update Own Info
-@app.put("/teacher/me/update", response_model=schemas.TeacherResponse, tags=["teacher"])
+@app.put("/teacher/{teacher_id}/update", response_model=schemas.TeacherResponse, tags=["teacher"])
 def update_own_info(update_data: schemas.UserUpdate, current_user = Depends(authorize_user), db: Session = Depends(get_db)):
 
     if current_user.role != "teacher":
@@ -374,7 +434,7 @@ def add_exam_schedule(
    
     if current_user.role != "teacher":
         raise HTTPException(status_code=403, detail="Only teachers can add exams.")
-
+    
     class_name = current_user.class_name
     subject_name = current_user.subject_name
     
@@ -392,6 +452,14 @@ def add_exam_schedule(
     status = status.lower()
     if status not in ['scheduled', 'completed']:
         raise HTTPException(status_code=400, detail="Invalid status. Choose either 'scheduled' or 'completed'.")
+    
+    existing_exam = db.query(models.Exam).filter(
+            models.Exam.subject_name == subject_name,
+            models.Exam.date == exam_date
+        ).first()
+    
+    if existing_exam:
+            raise HTTPException(status_code=400, detail=f"Exam for this subject have already been added.")
 
     new_exam = models.Exam(
         class_name=class_name,
@@ -525,7 +593,18 @@ def generate_marks(
         ).first()
 
         if not student:
-            raise HTTPException(status_code=404, detail=f"Student '{mark.student_name}' not found in class {exam.class_name} for subject {exam.subject_name}.")
+            raise HTTPException(status_code=404, detail=f"Student '{mark.student_name}' not found in class {exam.class_name}.")
+
+        existing_marks = db.query(models.StudentMarks).filter(
+            models.StudentMarks.student_name == mark.student_name,
+            models.StudentMarks.exam_id == exam.id
+        ).first()
+
+        if existing_marks:
+            raise HTTPException(status_code=400, detail=f"Marks for student '{mark.student_name}' have already been added for this exam.")
+        
+        if exam.date >= datetime.today().date():
+            raise HTTPException(status_code=400, detail="Exam is not completed yet.You can not add marks")
 
         if mark.student_marks > exam.marks:
             raise HTTPException(status_code=400, detail=f"Marks cannot be greater than the maximum marks ({exam.marks}) for this exam.")
@@ -555,7 +634,7 @@ def generate_marks(
 # REQUIREMENT: student - view student own marks
 @app.get("/students/{student_id}/marks", response_model=List[schemas.StudentMarks], tags=["student"])
 def get_student_marks(student_id: int, db: Session = Depends(get_db), current_user=Depends(authorize_user)):
-   
+
     if current_user.role != "student" or current_user.id != student_id:
         raise HTTPException(status_code=403, detail="Access forbidden")
 
@@ -563,12 +642,34 @@ def get_student_marks(student_id: int, db: Session = Depends(get_db), current_us
     if not eligible_exams:
         raise HTTPException(status_code=403, detail="You are not authorized to view this exam marks.")
     
-    marks_records = db.query(models.StudentMarks).filter(models.StudentMarks.student_id == student_id).all()
+    marks_records = (
+        db.query(
+            models.StudentMarks.id,
+            models.StudentMarks.student_name,
+            models.StudentMarks.class_name,
+            models.StudentMarks.subject_name,
+            models.StudentMarks.student_marks.label("student_marks"),
+            models.Exam.date
+        )
+        .join(models.Exam, models.StudentMarks.exam_id == models.Exam.id)
+        .filter(models.StudentMarks.student_name == current_user.username)
+        .all()
+    )
 
     if not marks_records:
         raise HTTPException(status_code=404, detail="Marks not found for the student")
 
-    return [schemas.StudentMarks.from_orm(student_marks) for student_marks in marks_records]
+    return [
+        schemas.StudentMarks(
+            id=record.id,
+            student_name=record.student_name,
+            class_name=record.class_name,
+            subject_name=record.subject_name,
+            student_marks=record.student_marks,
+            exam_date=record.date  
+        )
+        for record in marks_records
+    ]
 
 
 # REQUIREMENT: admin can delete users
