@@ -1,8 +1,10 @@
+import os
 import random
 import time
 from typing import List
 import dns.resolver
 from fastapi import FastAPI, Depends, HTTPException, Query, requests, status
+from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from . import  models, schemas
@@ -24,40 +26,6 @@ models.Base.metadata.create_all(bind=engine)
 
 
 # REQUIREMENT: Registration for Admin only
-def is_valid_domain(email: str) -> bool:
-    try:
-        domain = email.split('@')[1]
-
-        dns.resolver.resolve(domain, 'MX')
-        return True
-    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
-        return False
-
-def is_valid_email(email: str) -> bool:
-    if not is_valid_domain(email):
-        raise HTTPException(status_code=400, detail="Invalid email domain")
-    return True
-
-HUNTER_API_KEY = "12ac7d829840127d483cc27e59281c5bd5f61d2f"
-
-def verify_email_with_hunter(email: str) -> bool:
-    url = f"https://api.hunter.io/v2/email-verifier?email={email}&api_key={HUNTER_API_KEY}"
-    response = requests.get(url)
-    print(response.status_code, response.text) 
-    if response.status_code != 200:
-        raise HTTPException(status_code=500, detail="Error verifying email with Hunter API")
-    data = response.json()
-    print(data) 
-    if data['data']['status'] == 'valid':
-        return True 
-    else:
-        raise HTTPException(status_code=400, detail="Invalid or undeliverable email address")
-
-    # if data['data']['status'] == 'valid':
-    #     return True
-    # else: 
-    #     raise HTTPException(status_code=400, detail="Invalid or undeliverable email address")
-
 @app.post("/admin/register", response_model=schemas.AdminResponse, tags=["admin"])
 def admin_register(admin: schemas.AdminCreate, db: Session = Depends(get_db)):
     """
@@ -74,12 +42,6 @@ def admin_register(admin: schemas.AdminCreate, db: Session = Depends(get_db)):
     
     if db.query(models.User).filter(models.User.email == admin.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
-    
-    if not is_valid_email(admin.email):
-        raise HTTPException(status_code=400, detail="Invalid email domain")
-    
-    if not verify_email_with_hunter(admin.email):
-        raise HTTPException(status_code=400, detail="Email verification failed")
 
     hashed_password = get_password_hash(admin.password)
     new_admin = models.User(
@@ -93,11 +55,70 @@ def admin_register(admin: schemas.AdminCreate, db: Session = Depends(get_db)):
     db.refresh(new_admin)
     
     return {
-        "message": "Your email has been verify. You can login with your username",
+        "message": "Your email has been verified. You can log in with your username",
         "id": new_admin.id,
         "username": new_admin.username,
         "email": new_admin.email
     }
+
+# Login with Google
+@app.get(
+    "/auth/login",
+    tags=["login"],
+    summary="Login with Google",
+    description="""
+    Redirects the user to the Google Login page.
+
+    **Click the link below to login with Google:**
+
+    [Login with Google](http://localhost:8000/auth/login)
+    """,
+)
+def google_login():
+    """
+    Endpoint to redirect users to Google's OAuth login.
+    """
+    google_oauth_url = (
+        "https://accounts.google.com/o/oauth2/v2/auth"
+        "?response_type=code"
+        f"&client_id={os.getenv('GOOGLE_CLIENT_ID')}"
+        f"&redirect_uri={os.getenv('GOOGLE_REDIRECT_URI')}"
+        "&scope=email%20profile"
+    )
+    return RedirectResponse(url=google_oauth_url)
+
+@app.get("/auth/login/callback", tags=["login"], summary="Google Login Callback")
+def google_callback(code: str, db: Session = Depends(get_db)):
+    """
+    Handles the Google OAuth callback by exchanging the code for an access token
+    and retrieving user information.
+    """
+ 
+    token_url = "https://oauth2.googleapis.com/token"
+    token_data = {
+        "code": code,
+        "client_id": os.getenv("GOOGLE_CLIENT_ID"),
+        "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+        "redirect_uri": os.getenv("GOOGLE_REDIRECT_URI"),
+        "grant_type": "authorization_code",
+    }
+    token_response = requests.post(token_url, data=token_data)
+    token_response_data = token_response.json()
+
+    if "error" in token_response_data:
+        raise HTTPException(status_code=400, detail=token_response_data["error"])
+
+    user_info_url = "https://www.googleapis.com/oauth2/v1/userinfo"
+    user_info_headers = {"Authorization": f"Bearer {token_response_data['access_token']}"}
+    user_info_response = requests.get(user_info_url, headers=user_info_headers)
+    user_info = user_info_response.json()
+
+    user = db.query(models.User).filter(models.User.email == user_info["email"]).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Email not registered. Contact admin.")
+
+    return {"message": "Login successful", "user_info": user_info}
+
 
 # REQUIREMENT: Login users
 @app.post('/login', tags=["login"])
@@ -238,7 +259,13 @@ def add_student(student: schemas.StudentCreate, db: Session = Depends(get_db), t
         raise HTTPException(status_code=400, detail="Student already added")
     
     hashed_password = get_password_hash(student.password)
-    new_student = models.User(username=student.username, email=student.email, hashed_password=hashed_password, role="student" , class_name=student.class_name)
+    new_student = models.User(
+        username=student.username, 
+        email=student.email, 
+        hashed_password=hashed_password, 
+        role="student",
+        class_name=student.class_name
+    )
     db.add(new_student)
     db.commit()
     db.refresh(new_student)
@@ -268,7 +295,7 @@ def view_own_student_info(current_user= Depends(authorize_user), db: Session = D
 
 
 # REQUIREMENT: Student - Update Own Info
-@app.put("/student/{student-id}", response_model=schemas.StudentResponse, tags=["student"])
+@app.put("/student/{student-id}/update", response_model=schemas.StudentResponse, tags=["student"])
 def update_own_info(update_data: schemas.UserUpdate, current_user = Depends(authorize_user), db: Session = Depends(get_db)):
 
     if current_user.role != "student":
@@ -293,12 +320,19 @@ def add_teacher(teacher: schemas.TeacherCreate, db: Session = Depends(get_db), t
         raise HTTPException(status_code=400, detail="Teacher already added")
     
     hashed_password = get_password_hash(teacher.password)
-    new_teacher = models.User(username=teacher.username, email=teacher.email, hashed_password=hashed_password, role="teacher",class_name=teacher.class_name,subject_name=teacher.subject_name)
+    new_teacher = models.User(
+        username=teacher.username, 
+        email=teacher.email, 
+        hashed_password=hashed_password, 
+        role="teacher",
+        class_name=teacher.class_name,
+        subject_name=teacher.subject_name
+    )
     db.add(new_teacher)
     db.commit()
     db.refresh(new_teacher)
     
-    return  new_teacher
+    return new_teacher
 
 
 # REQUIREMENT:Add teacher salary by admin
@@ -674,13 +708,18 @@ def get_student_marks(student_id: int, db: Session = Depends(get_db), current_us
 
 # REQUIREMENT: admin can delete users
 @app.delete("/admin/delete_user/{user_id}" , tags=["admin"])
-async def delete_user(user_id: int, current_user=Depends(authorize_admin)):
-    user = await models.User.get(user_id=user_id)
+async def delete_user(user_id: int, current_user=Depends(authorize_user), db: Session = Depends(get_db)):
+
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, details= 'Only admin can delete users')
+    
+    user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    await user.delete()
+    
+    db.delete(user)
+    db.commit()
     return {"message": "User deleted successfully"}
-
 
 # @router.post("/add_exam")
 # async def add_exam(data: ExamCreateSchema, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
