@@ -5,7 +5,6 @@ import os
 from dotenv import load_dotenv
 from fastapi import HTTPException
 
-
 load_dotenv()
 
 EMAIL_USER = os.getenv("EMAIL_USER")

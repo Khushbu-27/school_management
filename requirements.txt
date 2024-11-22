@@ -7,3 +7,4 @@ sqlalchemy
 python-jose
 alembic
 psycopg2
+authlib

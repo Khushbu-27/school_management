@@ -1,23 +1,26 @@
+from logging import config
 import os
 import random
 import time
 from typing import List
-import dns.resolver
-from fastapi import FastAPI, Depends, HTTPException, Query, requests, status
-from fastapi.responses import RedirectResponse
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi import FastAPI, Depends, HTTPException, Query, Request, requests, status
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2, OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from authlib.integrations.starlette_client import OAuth
+from jose import JWTError
+import jwt
 from sqlalchemy.orm import Session
+from uvicorn import Config
 from . import  models, schemas
 from  . import email_utils  
 from .database import engine, get_db
-from router.auth import create_access_token, decode_access_token, get_password_hash, verify_password 
-from datetime import date, datetime
+from router.auth import  get_password_hash, verify_password
+from datetime import date, datetime, timedelta
 from fastapi import HTTPException, status
 from email_validator import validate_email, EmailNotValidError
 import smtplib
-import requests 
-
-
+import requests
+# ACCESS_TOKEN_EXPIRE_MINUTES,create_access_token, decode_access_token,
 app = FastAPI()
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
@@ -55,11 +58,12 @@ def admin_register(admin: schemas.AdminCreate, db: Session = Depends(get_db)):
     db.refresh(new_admin)
     
     return {
-        "message": "Your email has been verified. You can log in with your username",
+        "message": "Your email has been verify. You can login with your username",
         "id": new_admin.id,
         "username": new_admin.username,
         "email": new_admin.email
     }
+
 
 # Login with Google
 @app.get(
@@ -69,15 +73,13 @@ def admin_register(admin: schemas.AdminCreate, db: Session = Depends(get_db)):
     description="""
     Redirects the user to the Google Login page.
 
-    **Click the link below to login with Google:**
+    **Select the link below to login with Google:**
 
     [Login with Google](http://localhost:8000/auth/login)
     """,
 )
 def google_login():
-    """
-    Endpoint to redirect users to Google's OAuth login.
-    """
+   
     google_oauth_url = (
         "https://accounts.google.com/o/oauth2/v2/auth"
         "?response_type=code"
@@ -87,13 +89,11 @@ def google_login():
     )
     return RedirectResponse(url=google_oauth_url)
 
+print(os.getenv("GOOGLE_REDIRECT_URI"))
+
 @app.get("/auth/login/callback", tags=["login"], summary="Google Login Callback")
 def google_callback(code: str, db: Session = Depends(get_db)):
-    """
-    Handles the Google OAuth callback by exchanging the code for an access token
-    and retrieving user information.
-    """
- 
+   
     token_url = "https://oauth2.googleapis.com/token"
     token_data = {
         "code": code,
@@ -115,9 +115,92 @@ def google_callback(code: str, db: Session = Depends(get_db)):
 
     user = db.query(models.User).filter(models.User.email == user_info["email"]).first()
     if not user:
-        raise HTTPException(status_code=400, detail="Email not registered. Contact admin.")
+        user = models.User(
+            username=user_info["email"].split("@")[0],
+            email=user_info["email"],
+            role="student",
+        )
+        db.add(user)
+        db.commit()
 
-    return {"message": "Login successful", "user_info": user_info}
+    access_token = create_access_token(data={"sub": user.email}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+
+    return {
+        "message": "Login successful",
+        "access_token": access_token,
+        "token_type": "Bearer",
+        "user_info": user_info,
+    }
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login/callback")
+
+JWT_SECRET = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
+JWT_ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+def create_access_token(data: dict, expires_delta: timedelta = None):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta if expires_delta else timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def decode_access_token(token: str):
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Token is invalid or has expired")
+
+def token_response(token: str):
+    return {
+        "access_token": token
+    }
+
+def decode_jwt(token: str) -> dict:
+    try:
+        decoded_token = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return decoded_token if decoded_token["expires"] >= time.time() else None
+    except:
+        return {}
+    
+class JWTBearer(HTTPBearer):
+    def __init__(self, auto_error: bool = True):
+        super(JWTBearer, self).__init__(auto_error=auto_error)
+
+    async def __call__(self, request: Request):
+        credentials: HTTPAuthorizationCredentials = await super(JWTBearer, self).__call__(request)
+        if not credentials or credentials.scheme != "Bearer":
+            raise HTTPException(status_code=403, detail="Invalid authentication scheme.")
+        
+        if not self.verify_jwt(credentials.credentials):
+            raise HTTPException(status_code=403, detail="Invalid or expired token.")
+        return credentials.credentials
+
+    def verify_jwt(self, jwtoken: str) -> bool:
+        try:
+            decode_access_token(jwtoken)
+            return True
+        except HTTPException:
+            return False
+
+
+def get_current_user(token: str = Depends(JWTBearer())):
+  
+    try:
+        payload = decode_access_token(token)
+        user_email: str = payload.get("sub")
+        if user_email is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return user_email
+    except HTTPException as e:
+        raise e
+    except Exception:
+        raise HTTPException(status_code=401, detail="Could not validate credentials")
+    
+@app.get("/protected-endpoint", tags=["login"])
+def protected_endpoint(current_user: str = Depends(get_current_user)):
+  
+    return {"message": "Access granted", "user": current_user}
 
 
 # REQUIREMENT: Login users
@@ -125,7 +208,7 @@ def google_callback(code: str, db: Session = Depends(get_db)):
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.username == form_data.username).first()
     
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    if not user or not verify_password(form_data.password, user.hashed_password):   
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
     today = date.today()
@@ -155,27 +238,26 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
             "message": f"{user.role.capitalize()} login successful"
         }
 
-def authorize_admin(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-
+def authorize_admin(token: str = Depends(JWTBearer()), db: Session = Depends(get_db)):
     payload = decode_access_token(token)
     if payload.get("role") != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin authorization required")
     return payload
 
-def authorize_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-
+def authorize_user(token: str = Depends(JWTBearer()), db: Session = Depends(get_db)):
     payload = decode_access_token(token)
     username = payload.get("sub")
     role = payload.get("role")
- 
+
     if role not in ["admin", "teacher", "student"]:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid role")
 
     user = db.query(models.User).filter(models.User.username == username).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    
+
     return user
+
 
 otp_store = {}
 otp_expiry_time = 300 
@@ -257,15 +339,10 @@ def add_student(student: schemas.StudentCreate, db: Session = Depends(get_db), t
     db_student = db.query(models.User).filter(models.User.username == student.username).first()
     if db_student:
         raise HTTPException(status_code=400, detail="Student already added")
+
     
     hashed_password = get_password_hash(student.password)
-    new_student = models.User(
-        username=student.username, 
-        email=student.email, 
-        hashed_password=hashed_password, 
-        role="student",
-        class_name=student.class_name
-    )
+    new_student = models.User(username=student.username, email=student.email, hashed_password=hashed_password, role="student" , class_name=student.class_name)
     db.add(new_student)
     db.commit()
     db.refresh(new_student)
@@ -320,19 +397,12 @@ def add_teacher(teacher: schemas.TeacherCreate, db: Session = Depends(get_db), t
         raise HTTPException(status_code=400, detail="Teacher already added")
     
     hashed_password = get_password_hash(teacher.password)
-    new_teacher = models.User(
-        username=teacher.username, 
-        email=teacher.email, 
-        hashed_password=hashed_password, 
-        role="teacher",
-        class_name=teacher.class_name,
-        subject_name=teacher.subject_name
-    )
+    new_teacher = models.User(username=teacher.username, email=teacher.email, hashed_password=hashed_password, role="teacher",class_name=teacher.class_name,subject_name=teacher.subject_name)
     db.add(new_teacher)
     db.commit()
     db.refresh(new_teacher)
     
-    return new_teacher
+    return  new_teacher
 
 
 # REQUIREMENT:Add teacher salary by admin
