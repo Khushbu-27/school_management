@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+pyjwt
+passlib
+sqlalchemy
+python-jose
+alembic
+psycopg2
+authlib
