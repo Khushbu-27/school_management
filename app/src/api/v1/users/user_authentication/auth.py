@@ -5,8 +5,6 @@ from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, Request , status
 from passlib.context import CryptContext
 from requests import Session
-
-
 from app.database.database import get_db
 from app.src.api.v1.users.model.users import User
 from app.src.api.v1.users.services.utils.response_utils import Response
@@ -94,18 +92,21 @@ def authorize_admin(token: str = Depends(JWTBearer()), db: Session = Depends(get
 #     return user
 
 def authorize_user(token: str = Depends(JWTBearer()), db: Session = Depends(get_db)):
-    # Decode the access token to get user data
     payload = decode_access_token(token)
+    user_email = payload.get("user_email")
     username = payload.get("sub")
     
-    # Fetch user data from the database using the username (assuming 'username' is unique)
+    
     user = db.query(User).filter(User.username == username).first()
     
     if not user:
-        # If the user does not exist, raise an HTTP exception
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     
-    # Ensure the role is valid by checking the user's role from the database
+    # user_email = db.query(User).filter(User.email == user_email).first()
+    
+    # if  not user_email:
+    #     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User email not found")  
+    
     if user.role not in ["admin", "teacher", "student"]:
         return Response(
             status_code=403,
@@ -113,5 +114,45 @@ def authorize_user(token: str = Depends(JWTBearer()), db: Session = Depends(get_
             data={}
         ).send_error_response()
 
-    # Return the actual user object if everything is valid
     return user
+
+# def authorize_user(token: str = Depends(JWTBearer()), db: Session = Depends(get_db)):
+#     try:
+        
+#         payload = decode_access_token(token)
+#         user_email = payload.get("sub")
+#         username = payload.get("username")
+#         user.role = payload.get("role")
+
+        
+#         if not user_email and not username:
+#             raise HTTPException(
+#                 status_code=status.HTTP_401_UNAUTHORIZED, 
+#                 detail="Invalid authentication credentials"
+#             )
+#         if user.role not in ["admin", "teacher", "student"]:
+#             return Response(
+#                 status_code=403,
+#                 message="Invalid role",
+#                 data={}
+#             ).send_error_response()
+            
+#         user = db.query(User).filter(
+#             (User.email == user_email) | (User.username == username)).first()
+        
+#         if not user:
+#             raise HTTPException(
+#                 status_code=status.HTTP_404_NOT_FOUND, 
+#                 detail="User not found"
+#             )
+
+#         return user
+
+#     except HTTPException:
+#         raise
+#     except Exception as e:
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail="An error occurred during authentication"
+#         )
+

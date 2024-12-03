@@ -11,12 +11,28 @@ router = APIRouter()
 
 # REQUIREMENT: Teacher - View Own Info
 @router.get("/teacher/{teacher_id}")
-def view_own_teacher_info(teacher_id: int,db: Session = Depends(get_db) , current_user=Depends(authorize_user)):
-
-    teacher = db.query(User).filter(User.id == teacher_id ,User.role == "teacher").first()
-    if not teacher:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Teacher authorization required")
+def view_own_teacher_info(
+    teacher_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(authorize_user)
+):
+    # Ensure the current user is a teacher and matches the requested teacher_id
+    if current_user.role != "teacher" or current_user.id != teacher_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to view teacher information"
+        )
     
+    # Query the database for the teacher info
+    teacher = db.query(User).filter(User.id == teacher_id, User.role == "teacher").first()
+    
+    if not teacher:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Teacher not found"
+        )
+    
+    # Prepare the response data
     response_data = {
         "id": teacher.id,
         "username": teacher.username,
@@ -27,9 +43,8 @@ def view_own_teacher_info(teacher_id: int,db: Session = Depends(get_db) , curren
     return Response(
         status_code=200,
         message="Teacher details retrieved successfully",
-        data= response_data 
+        data=response_data
     ).send_success_response()
-
 
 # REQUIREMENT: view teacher own salary
 @router.get("/teacher/view_salary/{teacher_id}")

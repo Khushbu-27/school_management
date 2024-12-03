@@ -11,13 +11,29 @@ router = APIRouter()
 
 
 # REQUIREMENT: Student - View Own Info
-@router.get("/student/{student_id}" )
-def view_own_student_info(student_id: str,  db: Session = Depends(get_db),current_user=Depends(authorize_user)):
+@router.get("/student/{student_id}")
+def view_own_student_info(
+    student_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(authorize_user)
+):
     
-    student = db.query(User).filter(User.id == student_id ,User.role == "student").first()
+    print(f"Debug: current_user.id = {current_user.id}, student_id = {student_id}")
+    
+    # Ensure the user can only access their own info
+    if str(current_user.id) != student_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: You can only view your own information"
+        )
+    
+    student = db.query(User).filter(User.id == student_id, User.role == "student").first()
     
     if not student:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Student authorization required")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student not found"
+        )
     
     response_data = {
         "id": student.id,
@@ -28,5 +44,5 @@ def view_own_student_info(student_id: str,  db: Session = Depends(get_db),curren
     return Response(
         status_code=200,
         message="Student details retrieved successfully",
-        data= response_data 
+        data=response_data
     ).send_success_response()

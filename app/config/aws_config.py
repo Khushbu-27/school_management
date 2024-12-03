@@ -1,5 +1,5 @@
 
-AWS_ACCESS_KEY_ID = "your-access-key-id"
-AWS_SECRET_ACCESS_KEY = "your-secret-access-key"
-AWS_BUCKET_NAME = "your-bucket-name"
-AWS_REGION = "your-region"
+AWS_ACCESS_KEY_ID = "AKIAZKDIDG25Z7NATYHK"
+AWS_SECRET_ACCESS_KEY = "SICLziPCcTc9kj8tHB1Z0v4TlO7WVwVv6Y1oTVJg"
+AWS_BUCKET_NAME = "school-manage-bucket"
+AWS_REGION = "eu-north-1"

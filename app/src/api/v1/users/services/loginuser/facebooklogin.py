@@ -8,7 +8,8 @@ from datetime import timedelta
 from app.database.database import get_db
 from app.src.api.v1.users.model.users import User
 from app.src.api.v1.users.user_authentication.auth import create_access_token
-
+from dotenv import load_dotenv
+load_dotenv()
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 
 
@@ -23,15 +24,14 @@ router = APIRouter()
 
     **Select the link below to login with Facebook:**
 
-    [Login with Facebook](http://localhost:8000/auth/facebook-login)
-    """,
+    [Login with Facebook](http://127.0.0.1:8000/auth/facebook-login)
+    """,    
 )
 def facebook_login():
     facebook_oauth_url = (
-        "https://www.facebook.com/v12.0/dialog/oauth"
+        "https://www.facebook.com/v21.0/dialog/oauth"
         f"?client_id={os.getenv('FACEBOOK_APP_ID')}"
         f"&redirect_uri={os.getenv('FACEBOOK_REDIRECT_URI')}"
-        "&state=your_custom_state_string"
         "&scope=email,public_profile"
     )
     return RedirectResponse(url=facebook_oauth_url)
@@ -39,7 +39,7 @@ def facebook_login():
 
 @router.get("/auth/facebook-login/callback", tags=["facebook login"], summary="Facebook Login Callback")
 def facebook_callback(code: str, db: Session = Depends(get_db)):
-    token_url = "https://graph.facebook.com/v12.0/oauth/access_token"
+    token_url = "https://graph.facebook.com/v21.0/oauth/access_token"
     token_params = {
         "client_id": os.getenv("FACEBOOK_APP_ID"),
         "redirect_uri": os.getenv("FACEBOOK_REDIRECT_URI"),

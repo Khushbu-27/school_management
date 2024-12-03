@@ -20,5 +20,6 @@ class Exam(Base):
     status = Column(Enum(ExamStatus), nullable=False , default=ExamStatus.scheduled)
     marks = Column(Integer, nullable=False)
     test_paper = Column(String, nullable=True)
+    teacher_name = Column(String, nullable=False) 
 
     marks_received = relationship("StudentMarks", back_populates="exam")
